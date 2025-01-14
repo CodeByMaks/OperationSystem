@@ -1,77 +1,83 @@
 [org 0x7c00]
 [bits 16]
 
-; Clear the screen
-mov ah, 0x00
-mov al, 0x03
-int 0x10
+; Загрузчик (Bootloader)
+jmp boot_start
 
-; Print welcome message
-mov si, msg
-call print_string
+; Данные BIOS Parameter Block (BPB)
+bpb_oem_id          db 'MYOS    '   ; 8 байт
+bpb_bytes_per_sector dw 512
+bpb_sectors_per_cluster db 1
+bpb_reserved_sectors dw 1
+bpb_fat_count       db 2
+bpb_root_entries    dw 224
+bpb_total_sectors   dw 2880         ; 1.44 MB
+bpb_media_type      db 0xF0         ; 3.5" флоппи
+bpb_sectors_per_fat dw 9
+bpb_sectors_per_track dw 18
+bpb_heads           dw 2
+bpb_hidden_sectors  dd 0
+bpb_large_sectors   dd 0
 
-; Initialize cursor position
-mov ah, 0x02    ; Set cursor position
-mov bh, 0x00    ; Page number
-mov dh, 1       ; Row
-mov dl, 0       ; Column
-int 0x10
+; Расширенный загрузочный блок
+ebr_drive_number    db 0            ; 0x00 для флоппи
+ebr_reserved        db 0
+ebr_signature       db 0x29
+ebr_volume_id       dd 0x12345678
+ebr_volume_label    db 'MYOS DISK  ' ; 11 байт
+ebr_system_id       db 'FAT12   '    ; 8 байт
 
-; Cursor blink loop
-cursor_loop:
-    mov si, cursor_chars     ; Load cursor characters array
-    mov byte [current_char], 0  ; Reset counter
+boot_start:
+    ; Инициализация сегментов
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
 
-char_loop:
-    ; Show cursor
-    mov ah, 0x09            ; Write character and attribute at cursor position
-    mov al, [si]            ; Get current cursor character
-    mov bh, 0x00           ; Page number
-    mov bl, 0x0B           ; Attribute (bright cyan on black)
-    mov cx, 1              ; Number of times to write character
-    int 0x10
-    
-    ; Shorter delay for smooth animation
-    mov cx, 0x08           ; Outer loop count
-    mov dx, 0xFFFF         ; Inner loop count
-    call delay
-    
-    inc si                 ; Move to next character
-    inc byte [current_char]
-    cmp byte [current_char], 4  ; Check if we've shown all characters
-    jl char_loop
-    
-    jmp cursor_loop        ; Repeat forever
+    ; Сохраняем номер загрузочного диска
+    mov [ebr_drive_number], dl
 
-; Delay function
-delay:
-    push cx
-.outer_loop:
-    mov cx, dx
-.inner_loop:
-    loop .inner_loop
-    dec dx
-    jnz .outer_loop
-    pop cx
-    ret
+    ; Выводим сообщение о загрузке
+    mov si, loading_msg
+    call print_string
 
-; Print string function
+    ; Загружаем ядро (сектор 2, 6 секторов)
+    mov ax, 0x1000    ; Сегмент для загрузки
+    mov es, ax
+    xor bx, bx        ; Смещение
+    mov ah, 0x02      ; Функция чтения
+    mov al, 6         ; Количество секторов
+    mov ch, 0         ; Цилиндр 0
+    mov cl, 2         ; Начинаем со второго сектора
+    mov dh, 0         ; Головка 0
+    mov dl, [ebr_drive_number]
+    int 0x13
+    jc disk_error     ; Если CF=1, произошла ошибка
+
+    ; Переходим к ядру
+    jmp 0x1000:0x0000
+
+disk_error:
+    mov si, disk_error_msg
+    call print_string
+    jmp $
+
 print_string:
-    mov ah, 0x0e    ; BIOS teletype output
+    mov ah, 0x0E
 .loop:
-    lodsb           ; Load next character
-    test al, al     ; Check if end of string (0)
-    jz .done        ; If zero, we're done
-    int 0x10        ; Print character
-    jmp .loop       ; Repeat for next character
+    lodsb
+    test al, al
+    jz .done
+    int 0x10
+    jmp .loop
 .done:
     ret
 
-; Data
-msg db 'Welcome to MyOS!', 13, 10, 0
-cursor_chars db '|', 219, '|', ' '  ; Вертикальная черта, полный блок, вертикальная черта, пробел
-current_char db 0
+; Данные
+loading_msg db 'Loading MYOS...', 13, 10, 0
+disk_error_msg db 'Disk error!', 13, 10, 0
 
-; Boot sector magic
+; Заполняем остаток сектора
 times 510-($-$$) db 0
-dw 0xaa55
+dw 0xAA55
