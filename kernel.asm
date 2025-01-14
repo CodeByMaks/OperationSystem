@@ -1,125 +1,71 @@
 [bits 16]
-[org 0x1000]
+[org 0x0000]      ; Загружаемся в сегмент 0x1000
 
 ; Точка входа в ядро
 start:
-    ; Инициализация ядра
-    call init_video
-    call init_keyboard
-    call init_timer
-    
+    ; Настраиваем сегменты
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0xFFFE
+
+    ; Очищаем экран
+    mov ax, 0x0003    ; Текстовый режим 80x25
+    int 0x10
+
     ; Показываем приветствие
     mov si, kernel_msg
     call print_string
-    
-    ; Запускаем основной цикл
-    jmp main_loop
 
-; Инициализация видео
-init_video:
-    mov ax, 0x0003    ; Текстовый режим 80x25
-    int 0x10
-    ret
-
-; Инициализация клавиатуры
-init_keyboard:
-    ; Устанавливаем обработчик прерывания клавиатуры
-    cli
-    mov ax, 0
-    mov es, ax
-    mov word [es:0x24], keyboard_handler
-    mov word [es:0x26], cs
-    sti
-    ret
-
-; Инициализация таймера
-init_timer:
-    ; Устанавливаем обработчик прерывания таймера
-    cli
-    mov ax, 0
-    mov es, ax
-    mov word [es:0x20], timer_handler
-    mov word [es:0x22], cs
-    sti
-    ret
-
-; Обработчик клавиатуры
-keyboard_handler:
-    push ax
-    in al, 0x60       ; Читаем скан-код клавиши
-    mov [last_key], al
-    pop ax
-    iret
-
-; Обработчик таймера
-timer_handler:
-    push ax
-    inc word [ticks]
-    mov al, 0x20
-    out 0x20, al
-    pop ax
-    iret
-
-; Основной цикл
-main_loop:
-    ; Проверяем нажатие клавиш
-    mov al, [last_key]
-    cmp al, 0x01      ; ESC
-    je shutdown
-    
     ; Показываем меню
     call show_menu
-    
-    ; Обрабатываем выбор
-    call handle_input
-    
+
+main_loop:
+    ; Ждем нажатия клавиши
+    mov ah, 0
+    int 0x16        ; Ждем нажатие клавиши
+
+    ; Проверяем нажатую клавишу
+    cmp al, '1'
+    je .option1
+    cmp al, '2'
+    je .option2
+    cmp al, '3'
+    je .option3
+    cmp al, 27      ; ESC
+    je shutdown
     jmp main_loop
 
-; Показ меню
+.option1:
+    mov si, msg_option1
+    call print_string
+    jmp main_loop
+
+.option2:
+    mov si, msg_option2
+    call print_string
+    jmp main_loop
+
+.option3:
+    mov si, msg_option3
+    call print_string
+    jmp main_loop
+
+; Выключение системы
+shutdown:
+    mov si, msg_shutdown
+    call print_string
+    cli             ; Отключаем прерывания
+    hlt            ; Останавливаем процессор
+
+; Показать меню
 show_menu:
     mov si, menu_msg
     call print_string
     ret
 
-; Обработка ввода
-handle_input:
-    mov ah, 0
-    int 0x16
-    
-    cmp al, '1'
-    je run_terminal
-    cmp al, '2'
-    je run_calculator
-    cmp al, '3'
-    je run_calendar
-    ret
-
-; Запуск терминала
-run_terminal:
-    mov si, term_msg
-    call print_string
-    ret
-
-; Запуск калькулятора
-run_calculator:
-    mov si, calc_msg
-    call print_string
-    ret
-
-; Запуск календаря
-run_calendar:
-    mov si, cal_msg
-    call print_string
-    ret
-
-; Выключение
-shutdown:
-    mov si, shutdown_msg
-    call print_string
-    cli
-    hlt
-
-; Функция вывода строки
+; Процедура вывода строки
 print_string:
     mov ah, 0x0E
 .loop:
@@ -132,17 +78,16 @@ print_string:
     ret
 
 ; Данные
-kernel_msg db 'MyOS Kernel loaded!', 13, 10, 0
-menu_msg db 'Menu:', 13, 10
-         db '1. Terminal', 13, 10
-         db '2. Calculator', 13, 10
-         db '3. Calendar', 13, 10
+kernel_msg db 'Kernel started successfully!', 13, 10, 0
+menu_msg db 13, 10, 'Menu:', 13, 10
+         db '1. Hello World', 13, 10
+         db '2. Show Time', 13, 10
+         db '3. Clear Screen', 13, 10
          db 'ESC to shutdown', 13, 10, 0
-term_msg db 'Terminal started', 13, 10, 0
-calc_msg db 'Calculator started', 13, 10, 0
-cal_msg db 'Calendar started', 13, 10, 0
-shutdown_msg db 'Shutting down...', 13, 10, 0
+msg_option1 db 'Hello, World!', 13, 10, 0
+msg_option2 db 'Current time feature coming soon...', 13, 10, 0
+msg_option3 db 'Clearing screen...', 13, 10, 0
+msg_shutdown db 'Shutting down...', 13, 10, 0
 
-; Переменные
-ticks dw 0
-last_key db 0
+; Заполняем нулями до конца сектора
+times 512-($-$$) db 0

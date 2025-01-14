@@ -55,6 +55,10 @@ boot_start:
     int 0x13
     jc disk_error     ; Если CF=1, произошла ошибка
 
+    ; Сообщение об успешной загрузке ядра
+    mov si, kernel_loaded_msg
+    call print_string
+
     ; Переходим к ядру
     jmp 0x1000:0x0000
 
@@ -77,6 +81,7 @@ print_string:
 ; Данные
 loading_msg db 'Loading MYOS...', 13, 10, 0
 disk_error_msg db 'Disk error!', 13, 10, 0
+kernel_loaded_msg db 'Kernel loaded, jumping to kernel...', 13, 10, 0
 
 ; Заполняем остаток сектора
 times 510-($-$$) db 0
