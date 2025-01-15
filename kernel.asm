@@ -1,93 +1,69 @@
 [bits 16]
-[org 0x0000]      ; Загружаемся в сегмент 0x1000
+[org 0x0000]      ; Ядро загружается в 0x1000:0x0000
 
-; Точка входа в ядро
-start:
-    ; Настраиваем сегменты
+section .text
+    global kernel_start
+    
+    ; Внешние функции
+    extern video_init
+    extern video_print
+    extern video_set_color
+    extern video_clear
+    extern keyboard_init
+    extern memory_init
+    extern fs_init
+    extern shell_init
+    extern shell_loop
+
+kernel_start:
+    ; Устанавливаем сегменты
     mov ax, cs
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov sp, 0xFFFE
-
+    mov ds, ax      ; DS = CS
+    mov es, ax      ; ES = CS
+    mov ss, ax      ; SS = CS
+    mov sp, 0xFFF0  ; Стек ниже ядра
+    
+    ; Сохраняем номер загрузочного диска
+    mov [boot_drive], dl
+    
     ; Очищаем экран
-    mov ax, 0x0003    ; Текстовый режим 80x25
-    int 0x10
+    call video_clear
+    
+    ; Инициализируем видео
+    call video_init
+    
+    ; Выводим приветствие
+    mov al, 0x0F    ; Белый цвет
+    call video_set_color
+    mov si, msg_kernel
+    call video_print
+    
+    ; Инициализируем подсистемы
+    call keyboard_init
+    call memory_init
+    call fs_init
+    
+    ; Инициализация оболочки
+    call shell_init
+    
+    ; Запуск основного цикла
+    call shell_loop
+    
+    ; Бесконечный цикл (не должны сюда попасть)
+    cli
+    hlt
+    jmp $
 
-    ; Показываем приветствие
-    mov si, kernel_msg
-    call print_string
+section .data
+    msg_kernel db 'HeroX OS Kernel v1.0', 13, 10, 0
+    boot_drive db 0
 
-    ; Показываем меню
-    call show_menu
+section .bss
+    kernel_stack resb 4096
 
-main_loop:
-    ; Ждем нажатия клавиши
-    mov ah, 0
-    int 0x16        ; Ждем нажатие клавиши
-
-    ; Проверяем нажатую клавишу
-    cmp al, '1'
-    je .option1
-    cmp al, '2'
-    je .option2
-    cmp al, '3'
-    je .option3
-    cmp al, 27      ; ESC
-    je shutdown
-    jmp main_loop
-
-.option1:
-    mov si, msg_option1
-    call print_string
-    jmp main_loop
-
-.option2:
-    mov si, msg_option2
-    call print_string
-    jmp main_loop
-
-.option3:
-    mov si, msg_option3
-    call print_string
-    jmp main_loop
-
-; Выключение системы
-shutdown:
-    mov si, msg_shutdown
-    call print_string
-    cli             ; Отключаем прерывания
-    hlt            ; Останавливаем процессор
-
-; Показать меню
-show_menu:
-    mov si, menu_msg
-    call print_string
-    ret
-
-; Процедура вывода строки
-print_string:
-    mov ah, 0x0E
-.loop:
-    lodsb
-    test al, al
-    jz .done
-    int 0x10
-    jmp .loop
-.done:
-    ret
-
-; Данные
-kernel_msg db 'Kernel started successfully!', 13, 10, 0
-menu_msg db 13, 10, 'Menu:', 13, 10
-         db '1. Hello World', 13, 10
-         db '2. Show Time', 13, 10
-         db '3. Clear Screen', 13, 10
-         db 'ESC to shutdown', 13, 10, 0
-msg_option1 db 'Hello, World!', 13, 10, 0
-msg_option2 db 'Current time feature coming soon...', 13, 10, 0
-msg_option3 db 'Clearing screen...', 13, 10, 0
-msg_shutdown db 'Shutting down...', 13, 10, 0
-
-; Заполняем нулями до конца сектора
-times 512-($-$$) db 0
+; Включаем все необходимые файлы
+%include "video.asm"
+%include "keyboard.asm"
+%include "memory.asm"
+%include "fs.asm"
+%include "shell.asm"

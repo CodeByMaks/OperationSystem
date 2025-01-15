@@ -1,58 +1,28 @@
 [bits 16]
 
-; Драйвер клавиатуры
+section .text
+
+; Инициализация клавиатуры
 keyboard_init:
-    ; Инициализация буфера клавиатуры
-    mov word [kb_buffer_start], 0
-    mov word [kb_buffer_end], 0
-    
-    ; Установка обработчика прерывания
-    cli
-    mov ax, 0
-    mov es, ax
-    mov word [es:0x24], keyboard_handler
-    mov word [es:0x26], cs
-    sti
+    ; Инициализация клавиатуры
+    mov ah, 0x00
+    int 0x16      ; Сброс буфера клавиатуры
     ret
 
-; Обработчик прерывания клавиатуры
-keyboard_handler:
-    pusha
-    
-    ; Чтение скан-кода
-    in al, 0x60
-    
-    ; Сохранение в буфер
-    mov di, [kb_buffer_end]
-    mov [kb_buffer + di], al
-    inc di
-    and di, 0x0F      ; Циклический буфер на 16 байт
-    mov [kb_buffer_end], di
-    
-    ; Отправка EOI
-    mov al, 0x20
-    out 0x20, al
-    
-    popa
-    iret
-
-; Чтение символа из буфера
+; Чтение символа с клавиатуры
+; Возвращает: AL = ASCII код символа
 keyboard_read:
-    mov di, [kb_buffer_start]
-    cmp di, [kb_buffer_end]
-    je .no_key
-    
-    mov al, [kb_buffer + di]
-    inc di
-    and di, 0x0F
-    mov [kb_buffer_start], di
-    ret
-    
-.no_key:
-    xor al, al
+    xor ax, ax      ; AH = 0 - чтение символа с ожиданием
+    int 0x16        ; Вызываем BIOS
     ret
 
-; Данные
-kb_buffer times 16 db 0   ; Буфер клавиатуры
-kb_buffer_start dw 0      ; Начало буфера
-kb_buffer_end dw 0        ; Конец буфера
+section .data
+    kb_status db 0   ; Статус клавиатуры (Shift, Ctrl, Alt)
+
+section .bss align=2
+    ; Буфер клавиатуры
+    KB_BUFFER_SIZE equ 32
+    KB_BUFFER_MASK equ KB_BUFFER_SIZE-1
+    kb_buffer resb KB_BUFFER_SIZE
+    kb_buffer_start resw 1
+    kb_buffer_end resw 1

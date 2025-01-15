@@ -1,74 +1,84 @@
-[org 0x7c00]
 [bits 16]
+[org 0x7c00]
 
-; Загрузчик (Bootloader)
-jmp boot_start
+; Константы
+KERNEL_SEGMENT equ 0x1000
+KERNEL_OFFSET  equ 0x0000
+KERNEL_SIZE    equ 4    ; 4 сектора (2КБ)
 
-; Данные BIOS Parameter Block (BPB)
-bpb_oem_id          db 'MYOS    '   ; 8 байт
-bpb_bytes_per_sector dw 512
-bpb_sectors_per_cluster db 1
-bpb_reserved_sectors dw 1
-bpb_fat_count       db 2
-bpb_root_entries    dw 224
-bpb_total_sectors   dw 2880         ; 1.44 MB
-bpb_media_type      db 0xF0         ; 3.5" флоппи
-bpb_sectors_per_fat dw 9
-bpb_sectors_per_track dw 18
-bpb_heads           dw 2
-bpb_hidden_sectors  dd 0
-bpb_large_sectors   dd 0
-
-; Расширенный загрузочный блок
-ebr_drive_number    db 0            ; 0x00 для флоппи
-ebr_reserved        db 0
-ebr_signature       db 0x29
-ebr_volume_id       dd 0x12345678
-ebr_volume_label    db 'MYOS DISK  ' ; 11 байт
-ebr_system_id       db 'FAT12   '    ; 8 байт
-
-boot_start:
-    ; Инициализация сегментов
+start:
+    ; Установка сегментных регистров
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7C00
-
+    mov sp, 0x7c00
+    
     ; Сохраняем номер загрузочного диска
-    mov [ebr_drive_number], dl
-
+    mov [boot_drive], dl
+    
+    ; Очищаем экран
+    mov ah, 0x00    ; Установка видеорежима
+    mov al, 0x03    ; 80x25 цветной текст
+    int 0x10
+    
+    ; Устанавливаем цвет текста
+    mov ah, 0x0B    ; Установка цветовой палитры
+    mov bh, 0x00    ; Фоновый цвет
+    mov bl, 0x07    ; Светло-серый на черном
+    int 0x10
+    
     ; Выводим сообщение о загрузке
-    mov si, loading_msg
+    mov si, msg_loading
     call print_string
-
-    ; Загружаем ядро (сектор 2, 6 секторов)
-    mov ax, 0x1000    ; Сегмент для загрузки
-    mov es, ax
-    xor bx, bx        ; Смещение
-    mov ah, 0x02      ; Функция чтения
-    mov al, 6         ; Количество секторов
-    mov ch, 0         ; Цилиндр 0
-    mov cl, 2         ; Начинаем со второго сектора
-    mov dh, 0         ; Головка 0
-    mov dl, [ebr_drive_number]
+    
+    ; Сброс дисковой системы
+    xor ah, ah
     int 0x13
-    jc disk_error     ; Если CF=1, произошла ошибка
-
-    ; Сообщение об успешной загрузке ядра
-    mov si, kernel_loaded_msg
+    jc error
+    
+    ; Загружаем ядро
+    mov bx, KERNEL_SEGMENT
+    mov es, bx
+    mov bx, KERNEL_OFFSET
+    
+    mov ah, 0x02        ; Функция чтения секторов
+    mov al, KERNEL_SIZE ; Количество секторов
+    mov ch, 0           ; Цилиндр 0
+    mov cl, 2           ; Сектор 2 (сразу после загрузчика)
+    mov dh, 0           ; Головка 0
+    mov dl, [boot_drive]
+    int 0x13
+    jc error
+    
+    ; Проверяем, что все сектора загружены
+    cmp al, KERNEL_SIZE
+    jne error
+    
+    ; Выводим сообщение об успешной загрузке
+    mov si, msg_ok
     call print_string
+    
+    ; Передаем управление ядру
+    mov dl, [boot_drive]  ; Передаем номер загрузочного диска
+    jmp KERNEL_SEGMENT:KERNEL_OFFSET
 
-    ; Переходим к ядру
-    jmp 0x1000:0x0000
-
-disk_error:
-    mov si, disk_error_msg
+error:
+    mov si, msg_error
     call print_string
+    
+    ; Выводим код ошибки
+    mov al, ah
+    call print_hex
+    
     jmp $
 
+; Вывод строки (SI = указатель на строку)
 print_string:
+    push ax
+    push bx
     mov ah, 0x0E
+    mov bh, 0
 .loop:
     lodsb
     test al, al
@@ -76,13 +86,44 @@ print_string:
     int 0x10
     jmp .loop
 .done:
+    pop bx
+    pop ax
+    ret
+
+; Вывод шестнадцатеричного числа в AL
+print_hex:
+    push ax
+    push cx
+    
+    mov ah, 0x0E
+    mov bl, al
+    shr al, 4
+    call .print_digit
+    mov al, bl
+    and al, 0x0F
+    call .print_digit
+    
+    pop cx
+    pop ax
+    ret
+    
+.print_digit:
+    cmp al, 10
+    jb .decimal
+    add al, 'A' - 10
+    jmp .print
+.decimal:
+    add al, '0'
+.print:
+    int 0x10
     ret
 
 ; Данные
-loading_msg db 'Loading MYOS...', 13, 10, 0
-disk_error_msg db 'Disk error!', 13, 10, 0
-kernel_loaded_msg db 'Kernel loaded, jumping to kernel...', 13, 10, 0
+msg_loading db 'Loading HeroX OS...', 13, 10, 0
+msg_ok      db 'OK', 13, 10, 0
+msg_error   db 'Error loading HeroX! Code: ', 0
+boot_drive  db 0
 
-; Заполняем остаток сектора
+; Загрузочная сигнатура
 times 510-($-$$) db 0
 dw 0xAA55

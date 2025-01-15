@@ -1,71 +1,78 @@
 [bits 16]
 
-; Драйвер видео
+section .text
+
+; Инициализация видео
 video_init:
-    ; Установка видеорежима
-    mov ax, 0x0003    ; 80x25 текстовый режим
+    ; Установка видеорежима (80x25, цветной текст)
+    mov ah, 0x00
+    mov al, 0x03
     int 0x10
     
-    ; Очистка экрана
-    call video_clear
+    ; Установка курсора
+    mov ah, 0x02
+    xor bh, bh
+    xor dx, dx
+    int 0x10
+    
+    ; Установка атрибутов по умолчанию
+    mov byte [video_color], 0x07
     ret
 
 ; Очистка экрана
 video_clear:
-    mov ax, 0x0600    ; Прокрутка вверх (очистка)
-    mov bh, 0x07      ; Атрибуты (серый на черном)
-    xor cx, cx        ; Верхний левый угол (0,0)
-    mov dx, 0x184F    ; Нижний правый угол (24,79)
+    push es
+    push ax
+    push cx
+    push di
+    
+    ; Устанавливаем ES:DI на начало видеопамяти
+    mov ax, 0xB800
+    mov es, ax
+    xor di, di
+    
+    ; Заполняем экран пробелами
+    mov ax, 0x0720  ; Пробел с атрибутом 7 (серый на черном)
+    mov cx, 2000    ; 80*25 символов
+    rep stosw
+    
+    ; Возвращаем курсор в начало
+    mov ah, 0x02
+    xor bh, bh
+    xor dx, dx
     int 0x10
-    ret
-
-; Установка курсора
-video_set_cursor:
-    mov ah, 0x02      ; Функция установки курсора
-    mov bh, 0         ; Страница 0
-    int 0x10
-    ret
-
-; Вывод символа
-video_putchar:
-    mov ah, 0x0E      ; Функция телетайпа
-    int 0x10
+    
+    pop di
+    pop cx
+    pop ax
+    pop es
     ret
 
 ; Вывод строки
+; SI = указатель на строку (null-terminated)
 video_print:
-    mov ah, 0x0E
+    push ax
+    push bx
+    
+    mov ah, 0x0E    ; Функция телетайпа
+    mov bh, 0       ; Страница 0
+    mov bl, [video_color]
 .loop:
-    lodsb
-    test al, al
+    lodsb           ; Загружаем символ в AL
+    test al, al     ; Проверяем на конец строки
     jz .done
-    int 0x10
+    int 0x10        ; Выводим символ
     jmp .loop
 .done:
+    pop bx
+    pop ax
     ret
 
-; Вывод строки с атрибутами
-video_print_attr:
-    mov ah, 0x09      ; Функция вывода с атрибутами
-    mov bh, 0         ; Страница 0
-    mov cx, 1         ; Один символ
-.loop:
-    lodsb
-    test al, al
-    jz .done
-    int 0x10
-    inc dl            ; Следующая позиция
-    call video_set_cursor
-    jmp .loop
-.done:
+; Установка цвета текста
+; AL = цвет (старший полубайт - фон, младший - текст)
+video_set_color:
+    mov [video_color], al
     ret
 
-; Прокрутка экрана
-video_scroll:
-    mov ah, 0x06      ; Прокрутка вверх
-    mov al, 1         ; На одну строку
-    mov bh, 0x07      ; Атрибуты
-    mov cx, 0x0000    ; Верхний левый угол
-    mov dx, 0x184F    ; Нижний правый угол
-    int 0x10
-    ret
+section .data
+    video_color db 0x07  ; Текущий цвет (по умолчанию серый на черном)
