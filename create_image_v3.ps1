@@ -1,41 +1,38 @@
-# Создаем новый пустой образ размером 1.44 MB
-Write-Host "Создание образа диска..."
-$imageSize = 1474560  # 1.44 MB в байтах
-[byte[]]$imageData = New-Object byte[] $imageSize
-Set-Content -Path "os.img" -Value $imageData -Encoding Byte -Force
+# Путь к директории сборки
+$BUILD_DIR = "build"
 
-# Читаем загрузчик
-Write-Host "Чтение загрузчика..."
-$bootData = [System.IO.File]::ReadAllBytes("boot.bin")
-if ($bootData.Length -gt 512) {
-    Write-Error "Загрузчик больше 512 байт!"
+# Создаем директорию сборки, если она не существует
+if (-not (Test-Path $BUILD_DIR)) {
+    New-Item -ItemType Directory -Path $BUILD_DIR | Out-Null
+}
+
+# Создаем пустой образ диска размером 1.44 МБ
+Write-Host "Создание образа диска..."
+$imageSize = 1474560  # 1.44 MB
+$image = [byte[]]::new($imageSize)
+
+# Заполняем нулями
+for ($i = 0; $i -lt $imageSize; $i++) {
+    $image[$i] = 0
+}
+
+# Копируем загрузчик в первый сектор
+Write-Host "Копирование загрузчика..."
+$bootSector = [System.IO.File]::ReadAllBytes("$BUILD_DIR/boot.bin")
+[Array]::Copy($bootSector, 0, $image, 0, $bootSector.Length)
+
+# Компилируем и копируем ядро во второй сектор
+Write-Host "Компиляция ядра..."
+& "C:\Program Files\NASM\nasm.exe" -f bin ".\src\kernel\kernel.asm" -o "$BUILD_DIR/kernel.bin"
+if (Test-Path "$BUILD_DIR/kernel.bin") {
+    Write-Host "Копирование ядра..."
+    $kernel = [System.IO.File]::ReadAllBytes("$BUILD_DIR/kernel.bin")
+    [Array]::Copy($kernel, 0, $image, 512, $kernel.Length)  # 512 - начало второго сектора
+} else {
+    Write-Error "kernel.bin не создан!"
     exit 1
 }
-Write-Host "Размер загрузчика: $($bootData.Length) байт"
 
-# Читаем ядро
-Write-Host "Чтение ядра..."
-$kernelData = [System.IO.File]::ReadAllBytes("kernel.bin")
-Write-Host "Размер ядра: $($kernelData.Length) байт"
-
-# Открываем файл для записи
-Write-Host "Копирование данных..."
-$stream = [System.IO.File]::Open("os.img", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-
-try {
-    # Копируем загрузчик в начало образа
-    $stream.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
-    $stream.Write($bootData, 0, $bootData.Length)
-
-    # Копируем ядро после загрузчика (сектор 2)
-    $stream.Seek(512, [System.IO.SeekOrigin]::Begin) | Out-Null
-    $stream.Write($kernelData, 0, $kernelData.Length)
-}
-finally {
-    # Закрываем поток
-    $stream.Close()
-    $stream.Dispose()
-}
-
-Write-Host "Образ диска создан успешно!"
-Write-Host "Общий размер: $($bootData.Length + $kernelData.Length) байт"
+# Записываем образ
+[System.IO.File]::WriteAllBytes("$BUILD_DIR/os.img", $image)
+Write-Host "Образ системы создан"

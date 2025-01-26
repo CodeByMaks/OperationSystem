@@ -1,0 +1,595 @@
+[bits 16]
+
+%include "config.inc"
+
+section .text
+    global gui_init
+    global draw_pixel
+    global draw_line
+    global draw_rectangle
+    global draw_text
+    global draw_window
+    global draw_button
+    global draw_taskbar
+
+; Инициализация графического режима
+gui_init:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    push di
+
+    ; Устанавливаем видеорежим 13h (320x200, 256 цветов)
+    mov ax, 0x13
+    int 0x10
+
+    ; Очищаем экран
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    mov cx, 64000      ; 320 * 200
+    xor al, al         ; Черный цвет
+    rep stosb
+
+    ; Рисуем рамку рабочего стола
+    push word 0        ; y1
+    push word 0        ; x1
+    push word 199      ; y2
+    push word 319      ; x2
+    push word 1        ; COLOR_BLUE
+    call draw_rectangle
+
+    ; Рисуем панель задач
+    call draw_taskbar
+
+    pop di
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Рисование пикселя
+; Вход: x (word) - x координата
+;       y (word) - y координата
+;       color (byte) - цвет
+draw_pixel:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    ; Получаем параметры
+    mov cx, [bp+8]  ; x
+    mov dx, [bp+6]  ; y
+    mov al, [bp+4]  ; color
+
+    ; Проверяем границы
+    cmp cx, 320     ; SCREEN_WIDTH
+    jae .done
+    cmp dx, 200     ; SCREEN_HEIGHT
+    jae .done
+
+    ; Вычисляем смещение: y * 320 + x
+    mov ax, dx      ; Сохраняем y в ax
+    mov bx, 320     ; Загружаем ширину экрана
+    mul bx          ; ax = y * 320
+    add ax, cx      ; ax += x
+    mov bx, ax      ; Перемещаем результат в bx
+
+    ; Устанавливаем сегмент видеопамяти
+    mov ax, 0xA000
+    mov es, ax
+
+    ; Рисуем пиксель
+    mov [es:bx], al
+
+.done:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 6
+
+; Рисование линии
+; Вход: x1, y1, x2, y2 (word) - координаты
+;       color (byte) - цвет
+draw_line:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Получаем параметры
+    mov ax, [bp+12]  ; x1
+    mov bx, [bp+10]  ; y1
+    mov cx, [bp+8]   ; x2
+    mov dx, [bp+6]   ; y2
+    mov si, [bp+4]   ; color
+
+    ; Сохраняем координаты в локальные переменные
+    sub sp, 4        ; Выделяем место для x1 и y1
+    mov [bp-8], ax   ; Сохраняем x1
+    mov [bp-6], bx   ; Сохраняем y1
+
+    ; Рисуем начальную точку
+    push ax          ; x1
+    push bx          ; y1
+    push si          ; color
+    call draw_pixel
+
+    ; Рисуем конечную точку
+    push cx          ; x2
+    push dx          ; y2
+    push si          ; color
+    call draw_pixel
+
+    ; Вычисляем dx и dy
+    sub cx, ax       ; dx = x2 - x1
+    sub dx, bx       ; dy = y2 - y1
+
+    ; Определяем направление
+    mov di, 1        ; x_step
+    test cx, cx
+    jns .dx_pos
+    neg cx
+    neg di
+.dx_pos:
+
+    mov si, 1        ; y_step
+    test dx, dx
+    jns .dy_pos
+    neg dx
+    neg si
+.dy_pos:
+
+    ; Выбираем ось с большим изменением
+    cmp cx, dx
+    jb .y_driven
+
+    ; X-driven line
+    shl dx, 1
+    mov bx, dx
+    sub bx, cx
+    shl cx, 1
+
+.x_loop:
+    test bx, bx
+    jl .x_no_step
+    mov ax, [bp-6]   ; Загружаем y1
+    add ax, si       ; y1 += y_step
+    mov [bp-6], ax   ; Сохраняем y1
+    sub bx, cx
+.x_no_step:
+    add bx, dx
+    mov ax, [bp-8]   ; Загружаем x1
+    add ax, di       ; x1 += x_step
+    mov [bp-8], ax   ; Сохраняем x1
+
+    push word [bp-8] ; x
+    push word [bp-6] ; y
+    push si          ; color
+    call draw_pixel
+
+    mov ax, [bp-8]   ; Загружаем x1
+    cmp ax, [bp+8]   ; Сравниваем с x2
+    jne .x_loop
+    jmp .done
+
+.y_driven:
+    shl cx, 1
+    mov bx, cx
+    sub bx, dx
+    shl dx, 1
+
+.y_loop:
+    test bx, bx
+    jl .y_no_step
+    mov ax, [bp-8]   ; Загружаем x1
+    add ax, di       ; x1 += x_step
+    mov [bp-8], ax   ; Сохраняем x1
+    sub bx, dx
+.y_no_step:
+    add bx, cx
+    mov ax, [bp-6]   ; Загружаем y1
+    add ax, si       ; y1 += y_step
+    mov [bp-6], ax   ; Сохраняем y1
+
+    push word [bp-8] ; x
+    push word [bp-6] ; y
+    push si          ; color
+    call draw_pixel
+
+    mov ax, [bp-6]   ; Загружаем y1
+    cmp ax, [bp+6]   ; Сравниваем с y2
+    jne .y_loop
+
+.done:
+    add sp, 4        ; Освобождаем локальные переменные
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 10
+
+; Рисование прямоугольника
+; Вход: x1, y1, x2, y2 (word) - координаты углов
+;       color (byte) - цвет
+draw_rectangle:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Получаем параметры
+    mov ax, [bp+12]  ; x1
+    mov bx, [bp+10]  ; y1
+    mov cx, [bp+8]   ; x2
+    mov dx, [bp+6]   ; y2
+
+    ; Рисуем горизонтальные линии
+    push ax  ; x1
+    push bx  ; y1
+    push cx  ; x2
+    push bx  ; y1
+    push word [bp+4]  ; color
+    call draw_line
+
+    push ax  ; x1
+    push dx  ; y2
+    push cx  ; x2
+    push dx  ; y2
+    push word [bp+4]  ; color
+    call draw_line
+
+    ; Рисуем вертикальные линии
+    push ax  ; x1
+    push bx  ; y1
+    push ax  ; x1
+    push dx  ; y2
+    push word [bp+4]  ; color
+    call draw_line
+
+    push cx  ; x2
+    push bx  ; y1
+    push cx  ; x2
+    push dx  ; y2
+    push word [bp+4]  ; color
+    call draw_line
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 10
+
+; Рисование текста
+; Вход: x, y (word) - координаты
+;       text (dword) - указатель на строку
+;       color (byte) - цвет
+draw_text:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    ; Получаем параметры
+    mov ax, [bp+10]  ; x
+    mov bx, [bp+8]   ; y
+    mov si, [bp+6]   ; text
+    mov dl, [bp+4]   ; color
+
+.next_char:
+    ; Загружаем символ
+    lodsb
+    test al, al
+    jz .done
+
+    ; Вычисляем смещение в таблице шрифта
+    sub al, 32       ; Первый символ - пробел (32)
+    mov ah, 0
+    mov di, 8
+    mul di           ; ax = (char - 32) * 8
+
+    ; Получаем указатель на битмап символа
+    mov di, ax
+    add di, font8x8
+
+    ; Рисуем символ
+    mov cx, 8        ; Высота символа
+
+.char_loop_y:
+    push cx
+    mov cx, 8        ; Ширина символа
+    mov ah, [di]     ; Загружаем строку битмапа
+    
+.char_loop_x:
+    shr ah, 1
+    jnc .no_pixel
+
+    ; Рисуем пиксель
+    push ax
+    push word [bp+10]  ; x
+    push bx            ; y
+    mov al, dl         ; color
+    push ax
+    call draw_pixel
+    pop ax
+
+.no_pixel:
+    inc word [bp+10]
+    dec cx
+    jnz .char_loop_x
+
+    pop cx
+    inc bx
+    inc di
+    dec cx
+    jnz .char_loop_y
+
+    ; Переходим к следующему символу
+    add word [bp+10], 8
+    jmp .next_char
+
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 8
+
+; Рисование окна
+; Вход: x, y (word) - координаты верхнего левого угла
+;       width, height (word) - размеры окна
+;       title (dword) - указатель на заголовок
+draw_window:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Получаем параметры
+    mov ax, [bp+12]  ; x
+    mov bx, [bp+10]  ; y
+    mov cx, [bp+8]   ; width
+    mov dx, [bp+6]   ; height
+
+    ; Рисуем рамку окна
+    push ax          ; x1
+    push bx          ; y1
+    add cx, ax
+    add dx, bx
+    push cx          ; x2
+    push dx          ; y2
+    mov al, 7        ; Светло-серый цвет
+    push ax
+    call draw_rectangle
+
+    ; Рисуем заголовок
+    mov ax, [bp+12]  ; x
+    mov bx, [bp+10]  ; y
+    add ax, 4        ; Отступ для текста
+    add bx, 4
+    push ax          ; x
+    push bx          ; y
+    push dword [bp+4]  ; title
+    mov al, 15       ; Белый цвет
+    push ax
+    call draw_text
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 10
+
+; Рисование кнопки
+; Вход: x, y (word) - координаты верхнего левого угла
+;       width, height (word) - размеры кнопки
+;       text (dword) - указатель на текст
+;       color (byte) - цвет
+draw_button:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Получаем параметры
+    mov ax, [bp+14]  ; x
+    mov bx, [bp+12]  ; y
+    mov cx, [bp+10]  ; width
+    mov dx, [bp+8]   ; height
+
+    ; Рисуем рамку кнопки
+    push ax          ; x1
+    push bx          ; y1
+    add cx, ax
+    add dx, bx
+    push cx          ; x2
+    push dx          ; y2
+    mov al, 7        ; Светло-серый цвет
+    push ax
+    call draw_rectangle
+
+    ; Рисуем текст по центру
+    mov ax, [bp+14]  ; x
+    mov bx, [bp+12]  ; y
+    add ax, 4        ; Отступ для текста
+    add bx, 4
+    push ax          ; x
+    push bx          ; y
+    push dword [bp+6]  ; text
+    push word [bp+4]   ; color
+    call draw_text
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 12
+
+; Рисование панели задач
+draw_taskbar:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; Рисуем фон панели задач
+    push word 0        ; x1
+    push word 180      ; y1
+    push word 319      ; x2
+    push word 199      ; y2
+    push word 8        ; COLOR_DARKGRAY
+    call draw_rectangle
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret
+
+section .data
+    align 8
+    font8x8:
+    ; Базовый набор ASCII символов (32-127)
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   ; 32 Space
+    db 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00   ; 33 !
+    db 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   ; 34 "
+    db 0x36, 0x36, 0x7F, 0x36, 0x7F, 0x36, 0x36, 0x00   ; 35 #
+    db 0x0C, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x0C, 0x00   ; 36 $
+    db 0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00   ; 37 %
+    db 0x1C, 0x36, 0x1C, 0x6E, 0x3B, 0x33, 0x6E, 0x00   ; 38 &
+    db 0x06, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00   ; 39 '
+    db 0x18, 0x0C, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x00   ; 40 (
+    db 0x06, 0x0C, 0x18, 0x18, 0x18, 0x0C, 0x06, 0x00   ; 41 )
+    db 0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00   ; 42 *
+    db 0x00, 0x0C, 0x0C, 0x3F, 0x0C, 0x0C, 0x00, 0x00   ; 43 +
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x06   ; 44 ,
+    db 0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0x00   ; 45 -
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00   ; 46 .
+    db 0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x01, 0x00   ; 47 /
+    db 0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x3E, 0x00   ; 48 0
+    db 0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F, 0x00   ; 49 1
+    db 0x1E, 0x33, 0x30, 0x1C, 0x06, 0x33, 0x3F, 0x00   ; 50 2
+    db 0x1E, 0x33, 0x30, 0x1C, 0x30, 0x33, 0x1E, 0x00   ; 51 3
+    db 0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x78, 0x00   ; 52 4
+    db 0x3F, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E, 0x00   ; 53 5
+    db 0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x1E, 0x00   ; 54 6
+    db 0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x00   ; 55 7
+    db 0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x1E, 0x00   ; 56 8
+    db 0x1E, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E, 0x00   ; 57 9
+    db 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x00   ; 58 :
+    db 0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x06   ; 59 ;
+    db 0x18, 0x0C, 0x06, 0x03, 0x06, 0x0C, 0x18, 0x00   ; 60 <
+    db 0x00, 0x00, 0x3F, 0x00, 0x00, 0x3F, 0x00, 0x00   ; 61 =
+    db 0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00   ; 62 >
+    db 0x1E, 0x33, 0x30, 0x18, 0x0C, 0x00, 0x0C, 0x00   ; 63 ?
+    db 0x3E, 0x63, 0x7B, 0x7B, 0x7B, 0x03, 0x1E, 0x00   ; 64 @
+    db 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00   ; 65 A
+    db 0x3F, 0x66, 0x66, 0x3E, 0x66, 0x66, 0x3F, 0x00   ; 66 B
+    db 0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00   ; 67 C
+    db 0x1F, 0x36, 0x66, 0x66, 0x66, 0x36, 0x1F, 0x00   ; 68 D
+    db 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x46, 0x7F, 0x00   ; 69 E
+    db 0x7F, 0x46, 0x16, 0x1E, 0x16, 0x06, 0x0F, 0x00   ; 70 F
+    db 0x3C, 0x66, 0x03, 0x03, 0x73, 0x66, 0x7C, 0x00   ; 71 G
+    db 0x33, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x33, 0x00   ; 72 H
+    db 0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00   ; 73 I
+    db 0x78, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E, 0x00   ; 74 J
+    db 0x67, 0x66, 0x36, 0x1E, 0x36, 0x66, 0x67, 0x00   ; 75 K
+    db 0x0F, 0x06, 0x06, 0x06, 0x46, 0x66, 0x7F, 0x00   ; 76 L
+    db 0x63, 0x77, 0x7F, 0x7F, 0x6B, 0x63, 0x63, 0x00   ; 77 M
+    db 0x63, 0x67, 0x6F, 0x7B, 0x73, 0x63, 0x63, 0x00   ; 78 N
+    db 0x1C, 0x36, 0x63, 0x63, 0x63, 0x36, 0x1C, 0x00   ; 79 O
+    db 0x3F, 0x66, 0x66, 0x3E, 0x06, 0x06, 0x0F, 0x00   ; 80 P
+    db 0x1E, 0x33, 0x33, 0x33, 0x3B, 0x1E, 0x38, 0x00   ; 81 Q
+    db 0x3F, 0x66, 0x66, 0x3E, 0x36, 0x66, 0x67, 0x00   ; 82 R
+    db 0x1E, 0x33, 0x07, 0x0E, 0x38, 0x33, 0x1E, 0x00   ; 83 S
+    db 0x3F, 0x2D, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00   ; 84 T
+    db 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x3F, 0x00   ; 85 U
+    db 0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00   ; 86 V
+    db 0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00   ; 87 W
+    db 0x63, 0x63, 0x36, 0x1C, 0x1C, 0x36, 0x63, 0x00   ; 88 X
+    db 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x0C, 0x1E, 0x00   ; 89 Y
+    db 0x7F, 0x63, 0x31, 0x18, 0x4C, 0x66, 0x7F, 0x00   ; 90 Z
+    db 0x1E, 0x06, 0x06, 0x06, 0x06, 0x06, 0x1E, 0x00   ; 91 [
+    db 0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x40, 0x00   ; 92 \
+    db 0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00   ; 93 ]
+    db 0x08, 0x1C, 0x36, 0x63, 0x00, 0x00, 0x00, 0x00   ; 94 ^
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF   ; 95 _
+    db 0x0C, 0x0C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00   ; 96 `
+    db 0x00, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00   ; 97 a
+    db 0x07, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3B, 0x00   ; 98 b
+    db 0x00, 0x00, 0x1E, 0x33, 0x03, 0x33, 0x1E, 0x00   ; 99 c
+    db 0x38, 0x30, 0x30, 0x3e, 0x33, 0x33, 0x6E, 0x00   ; 100 d
+    db 0x00, 0x00, 0x1E, 0x33, 0x3f, 0x03, 0x1E, 0x00   ; 101 e
+    db 0x1C, 0x36, 0x06, 0x0f, 0x06, 0x06, 0x0F, 0x00   ; 102 f
+    db 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x1F   ; 103 g
+    db 0x07, 0x06, 0x36, 0x6E, 0x66, 0x66, 0x67, 0x00   ; 104 h
+    db 0x0C, 0x00, 0x0E, 0x0C, 0x0C, 0x0C, 0x1E, 0x00   ; 105 i
+    db 0x30, 0x00, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E   ; 106 j
+    db 0x07, 0x06, 0x66, 0x36, 0x1E, 0x36, 0x67, 0x00   ; 107 k
+    db 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00   ; 108 l
+    db 0x00, 0x00, 0x33, 0x7F, 0x7F, 0x6B, 0x63, 0x00   ; 109 m
+    db 0x00, 0x00, 0x1F, 0x33, 0x33, 0x33, 0x33, 0x00   ; 110 n
+    db 0x00, 0x00, 0x1E, 0x33, 0x33, 0x33, 0x1E, 0x00   ; 111 o
+    db 0x00, 0x00, 0x3B, 0x66, 0x66, 0x3E, 0x06, 0x0F   ; 112 p
+    db 0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x78   ; 113 q
+    db 0x00, 0x00, 0x3B, 0x6E, 0x66, 0x06, 0x0F, 0x00   ; 114 r
+    db 0x00, 0x00, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x00   ; 115 s
+    db 0x08, 0x0C, 0x3E, 0x0C, 0x0C, 0x2C, 0x18, 0x00   ; 116 t
+    db 0x00, 0x00, 0x33, 0x33, 0x33, 0x33, 0x6E, 0x00   ; 117 u
+    db 0x00, 0x00, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00   ; 118 v
+    db 0x00, 0x00, 0x63, 0x6B, 0x7F, 0x7F, 0x36, 0x00   ; 119 w
+    db 0x00, 0x00, 0x63, 0x36, 0x1C, 0x36, 0x63, 0x00   ; 120 x
+    db 0x00, 0x00, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x1F   ; 121 y
+    db 0x00, 0x00, 0x3F, 0x19, 0x0C, 0x26, 0x3F, 0x00   ; 122 z
+    db 0x38, 0x0C, 0x0C, 0x07, 0x0C, 0x0C, 0x38, 0x00   ; 123 {
+    db 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00   ; 124 |
+    db 0x07, 0x0C, 0x0C, 0x38, 0x0C, 0x0C, 0x07, 0x00   ; 125 }
+    db 0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   ; 126 ~
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   ; 127 DEL
+
+section .bss
+    window_x resw 1
+    window_y resw 1
+    window_width resw 1
+    window_height resw 1

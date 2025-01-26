@@ -1,52 +1,257 @@
 [bits 16]
+%include "config.inc"
+
+section .data
+    process_table:    times (MAX_PROCESSES * PROCESS_ENTRY_SIZE) db 0
+    current_process:  dw 0
+    next_pid:        dw 1
+    error_msg db 'Process error', 0
+    success_msg db 'Operation successful', 0
 
 section .text
+    global init_processes
+    global create_process
+    global switch_process
+    global terminate_process
+    global get_current_process
+    global schedule_next_process
     global process_init
     global process_create
     global process_exit
     global scheduler_interrupt
-    extern write_word
-    extern read_word
-    extern memory_alloc
-    extern memory_free
-    extern check_resources
-    extern save_system_state
-    extern terminate_all_processes
+    global handle_shutdown
+    global handle_file_operation
 
-; System call numbers
-SYS_EXIT     equ 1
-SYS_WRITE    equ 2
-SYS_READ     equ 3
-SYS_CREATE   equ 4
-SYS_DELETE   equ 5
-SYS_SHUTDOWN equ 6
+; Инициализация таблицы процессов
+init_processes:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
 
-; Process Control Block (PCB) structure
-PCB_SIZE    equ 36      ; PCB size
-PCB_NEXT    equ 0       ; Offset for next
-PCB_PREV    equ 2       ; Offset for prev
-PCB_STATE   equ 4       ; Offset for state
-PCB_PID     equ 6       ; Offset for pid
-PCB_SP      equ 8       ; Offset for sp
-PCB_SS      equ 10      ; Offset for ss
-PCB_IP      equ 12      ; Offset for ip
-PCB_CS      equ 14      ; Offset for cs
-PCB_FLAGS   equ 16      ; Offset for flags
-PCB_AX      equ 18      ; Offset for ax
-PCB_BX      equ 20      ; Offset for bx
-PCB_CX      equ 22      ; Offset for cx
-PCB_DX      equ 24      ; Offset for dx
-PCB_SI      equ 26      ; Offset for si
-PCB_DI      equ 28      ; Offset for di
-PCB_BP      equ 30      ; Offset for bp
-PCB_DS      equ 32      ; Offset for ds
-PCB_ES      equ 34      ; Offset for es
+    ; Очищаем таблицу процессов
+    mov ax, 0
+    mov bx, process_table
+    mov cx, MAX_PROCESSES * PROCESS_ENTRY_SIZE
+    rep stosb
 
-; Process states
-PROCESS_READY    equ 0
-PROCESS_RUNNING  equ 1
-PROCESS_BLOCKED  equ 2
-PROCESS_ZOMBIE   equ 3
+    ; Инициализируем текущий процесс
+    mov word [current_process], 0
+    mov word [next_pid], 1
+
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret
+
+; Создание нового процесса
+; Вход: 
+;   - stack: указатель на код процесса
+;   - stack+2: размер стека процесса
+; Выход:
+;   - ax: PID нового процесса (0 если ошибка)
+create_process:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; Находим свободную запись в таблице процессов
+    mov bx, process_table
+    mov cx, MAX_PROCESSES
+    
+.find_free:
+    mov al, [bx]
+    test al, al
+    jz .found_free
+    add bx, PROCESS_ENTRY_SIZE
+    loop .find_free
+    
+    ; Нет свободных слотов
+    xor ax, ax
+    jmp .exit
+
+.found_free:
+    ; Заполняем запись процесса
+    mov ax, [next_pid]
+    mov [bx], ax                    ; PID
+    mov ax, [bp+4]                  ; Указатель на код
+    mov [bx+2], ax
+    mov ax, [bp+6]                  ; Размер стека
+    mov [bx+4], ax
+    mov word [bx+6], 0              ; Начальное состояние - готов
+    
+    ; Увеличиваем next_pid
+    inc word [next_pid]
+    
+    ; Возвращаем PID
+    mov ax, [bx]
+
+.exit:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret 4
+
+; Переключение на другой процесс
+; Вход: ax - PID процесса
+switch_process:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    
+    ; Сохраняем контекст текущего процесса
+    mov bx, [current_process]
+    test bx, bx
+    jz .no_current
+    
+    ; Сохраняем регистры
+    mov [bx+8], ax
+    mov [bx+10], cx
+    mov [bx+12], dx
+    mov [bx+14], sp
+    mov [bx+16], bp
+    
+.no_current:
+    ; Находим новый процесс
+    mov ax, [bp+4]
+    mov bx, process_table
+    mov cx, MAX_PROCESSES
+    
+.find_process:
+    cmp [bx], ax
+    je .found_process
+    add bx, PROCESS_ENTRY_SIZE
+    loop .find_process
+    
+    ; Процесс не найден
+    jmp .exit
+    
+.found_process:
+    ; Восстанавливаем контекст
+    mov ax, [bx+8]
+    mov cx, [bx+10]
+    mov dx, [bx+12]
+    mov sp, [bx+14]
+    mov bp, [bx+16]
+    
+    ; Обновляем текущий процесс
+    mov [current_process], bx
+    
+.exit:
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret 2
+
+; Завершение процесса
+; Вход: ax - PID процесса
+terminate_process:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    
+    ; Находим процесс
+    mov bx, process_table
+    mov cx, MAX_PROCESSES
+    
+.find_process:
+    cmp [bx], ax
+    je .found_process
+    add bx, PROCESS_ENTRY_SIZE
+    loop .find_process
+    jmp .exit
+    
+.found_process:
+    ; Очищаем запись процесса
+    push di
+    mov di, bx
+    mov cx, PROCESS_ENTRY_SIZE
+    xor ax, ax
+    rep stosb
+    pop di
+    
+    ; Если это текущий процесс, сбрасываем указатель
+    cmp [current_process], bx
+    jne .exit
+    mov word [current_process], 0
+    
+.exit:
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+; Получение текущего процесса
+; Выход: ax - PID текущего процесса (0 если нет)
+get_current_process:
+    mov bx, [current_process]
+    test bx, bx
+    jz .no_process
+    mov ax, [bx]
+    ret
+    
+.no_process:
+    xor ax, ax
+    ret
+
+; Планирование следующего процесса
+schedule_next_process:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    
+    ; Получаем текущий процесс
+    mov bx, [current_process]
+    test bx, bx
+    jz .start_from_beginning
+    
+    ; Ищем следующий готовый процесс
+    add bx, PROCESS_ENTRY_SIZE
+    mov cx, MAX_PROCESSES - 1
+    jmp .find_next
+    
+.start_from_beginning:
+    mov bx, process_table
+    mov cx, MAX_PROCESSES
+    
+.find_next:
+    cmp byte [bx], 0               ; Проверяем, есть ли процесс
+    je .next_entry
+    cmp word [bx+6], 0            ; Проверяем состояние (0 = готов)
+    je .found_next
+    
+.next_entry:
+    add bx, PROCESS_ENTRY_SIZE
+    loop .find_next
+    
+    ; Если не нашли, начинаем сначала
+    mov bx, process_table
+    mov cx, MAX_PROCESSES
+    jmp .find_next
+    
+.found_next:
+    ; Переключаемся на найденный процесс
+    mov ax, [bx]
+    call switch_process
+    
+    pop cx
+    pop bx
+    pop bp
+    ret
 
 ; Initialize process manager
 process_init:
@@ -386,7 +591,54 @@ handle_file_operation:
     ret
 
 section .data align=2
-    current_process dw 0    ; Pointer to current process
-    next_pid dw 1          ; Next available PID
-    error_msg db 'Process error', 0
-    success_msg db 'Operation successful', 0
+    ; Константы для процессов
+    MAX_PROCESSES       equ 16
+    PROCESS_ENTRY_SIZE  equ 32
+    
+    ; Смещения в структуре процесса
+    PROCESS_PID         equ 0   ; 2 байта
+    PROCESS_CODE_PTR    equ 2   ; 2 байта
+    PROCESS_STACK_SIZE  equ 4   ; 2 байта
+    PROCESS_STATE       equ 6   ; 2 байта
+    PROCESS_REGISTERS   equ 8   ; 16 байт (ax, cx, dx, sp, bp, si, di, flags)
+    
+    ; Состояния процесса
+    PROCESS_READY       equ 0
+    PROCESS_RUNNING     equ 1
+    PROCESS_BLOCKED     equ 2
+    PROCESS_TERMINATED  equ 3
+
+; System call numbers
+SYS_EXIT     equ 1
+SYS_WRITE    equ 2
+SYS_READ     equ 3
+SYS_CREATE   equ 4
+SYS_DELETE   equ 5
+SYS_SHUTDOWN equ 6
+
+; Process Control Block (PCB) structure
+PCB_SIZE    equ 36      ; PCB size
+PCB_NEXT    equ 0       ; Offset for next
+PCB_PREV    equ 2       ; Offset for prev
+PCB_STATE   equ 4       ; Offset for state
+PCB_PID     equ 6       ; Offset for pid
+PCB_SP      equ 8       ; Offset for sp
+PCB_SS      equ 10      ; Offset for ss
+PCB_IP      equ 12      ; Offset for ip
+PCB_CS      equ 14      ; Offset for cs
+PCB_FLAGS   equ 16      ; Offset for flags
+PCB_AX      equ 18      ; Offset for ax
+PCB_BX      equ 20      ; Offset for bx
+PCB_CX      equ 22      ; Offset for cx
+PCB_DX      equ 24      ; Offset for dx
+PCB_SI      equ 26      ; Offset for si
+PCB_DI      equ 28      ; Offset for di
+PCB_BP      equ 30      ; Offset for bp
+PCB_DS      equ 32      ; Offset for ds
+PCB_ES      equ 34      ; Offset for es
+
+; Process states
+PROCESS_READY    equ 0
+PROCESS_RUNNING  equ 1
+PROCESS_BLOCKED  equ 2
+PROCESS_ZOMBIE   equ 3
