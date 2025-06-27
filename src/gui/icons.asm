@@ -45,7 +45,7 @@ struc desktop_icon
     .y:      resw 1    ; Y координата
     .type:   resb 1    ; Тип иконки (0 = папка, 1 = файл)
     .name:   resb 12   ; Имя иконки (11 символов + null)
-    .size:
+    .size:   resb 0
 endstruc
 
 ; Массив иконок на рабочем столе
